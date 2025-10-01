@@ -1,30 +1,30 @@
+import hashlib
 from datetime import datetime, timezone
 from flask import Flask, request, jsonify
-from flask_cors import CORS
 from pydantic import ValidationError
+
 from models import SurveySubmission, StoredSurveyRecord
 from storage import append_json_line
 
-app = Flask(__name__)
-# Allow cross-origin requests so the static HTML can POST from localhost or file://
-CORS(app, resources={r"/v1/*": {"origins": "*"}})
+app = Flask("survey-intake-api")
 
-@app.route("/ping", methods=["GET"])
+@app.get("/ping")
 def ping():
-    """Simple health check endpoint."""
     return jsonify({
-        "status": "ok",
         "message": "API is alive",
+        "status": "ok",
         "utc_time": datetime.now(timezone.utc).isoformat()
     })
 
 @app.post("/v1/survey")
 def submit_survey():
     payload = request.get_json(silent=True)
-    if payload is None:
+    if not payload:
         return jsonify({"error": "invalid_json", "detail": "Body must be application/json"}), 400
 
     try:
+        # Exercise 1: Add user_agent from headers
+        payload['user_agent'] = request.headers.get('User-Agent')
         submission = SurveySubmission(**payload)
     except ValidationError as ve:
         return jsonify({"error": "validation_error", "detail": ve.errors()}), 422
@@ -34,6 +34,19 @@ def submit_survey():
         received_at=datetime.now(timezone.utc),
         ip=request.headers.get("X-Forwarded-For", request.remote_addr or "")
     )
+
+    # Exercise 3: Create submission_id
+    current_hour_str = record.received_at.strftime('%Y%m%d%H')
+    id_string_to_hash = submission.email + current_hour_str
+    record.submission_id = hashlib.sha256(id_string_to_hash.encode('utf-8')).hexdigest()
+
+    # Exercise 2: Hash PII before saving
+    email_bytes = record.email.encode('utf-8')
+    record.email = hashlib.sha256(email_bytes).hexdigest()
+    
+    age_bytes = str(record.age).encode('utf-8')
+    record.age = hashlib.sha256(age_bytes).hexdigest()
+
     append_json_line(record.dict())
     return jsonify({"status": "ok"}), 201
 
